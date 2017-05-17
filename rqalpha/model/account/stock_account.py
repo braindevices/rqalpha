@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import six
+import datetime
 from collections import defaultdict
 
 from .base_account import BaseAccount
@@ -26,19 +27,22 @@ from ...const import SIDE, ACCOUNT_TYPE
 
 
 class StockAccount(BaseAccount):
+
+    __abandon_properties__ = []
+
     def __init__(self, total_cash, positions, backward_trade_set=set(), dividend_receivable=None, register_event=True):
         super(StockAccount, self).__init__(total_cash, positions, backward_trade_set, register_event)
         self._dividend_receivable = dividend_receivable if dividend_receivable else {}
 
     def register_event(self):
         event_bus = Environment.get_instance().event_bus
-        event_bus.add_listener(EVENT.TRADE, self._on_trade)
-        event_bus.add_listener(EVENT.ORDER_PENDING_NEW, self._on_order_pending_new)
-        event_bus.add_listener(EVENT.ORDER_CREATION_REJECT, self._on_order_unsolicited_update)
-        event_bus.add_listener(EVENT.ORDER_UNSOLICITED_UPDATE, self._on_order_unsolicited_update)
-        event_bus.add_listener(EVENT.ORDER_CANCELLATION_PASS, self._on_order_unsolicited_update)
-        event_bus.add_listener(EVENT.PRE_BEFORE_TRADING, self._before_trading)
-        event_bus.add_listener(EVENT.SETTLEMENT, self._on_settlement)
+        event_bus.prepend_listener(EVENT.TRADE, self._on_trade)
+        event_bus.prepend_listener(EVENT.ORDER_PENDING_NEW, self._on_order_pending_new)
+        event_bus.prepend_listener(EVENT.ORDER_CREATION_REJECT, self._on_order_unsolicited_update)
+        event_bus.prepend_listener(EVENT.ORDER_UNSOLICITED_UPDATE, self._on_order_unsolicited_update)
+        event_bus.prepend_listener(EVENT.ORDER_CANCELLATION_PASS, self._on_order_unsolicited_update)
+        event_bus.prepend_listener(EVENT.PRE_BEFORE_TRADING, self._before_trading)
+        event_bus.prepend_listener(EVENT.SETTLEMENT, self._on_settlement)
 
     def get_state(self):
         return {
@@ -128,8 +132,7 @@ class StockAccount(BaseAccount):
     def _before_trading(self, event):
         trading_date = Environment.get_instance().trading_dt.date()
         self._handle_dividend_payable(trading_date)
-        if Environment.get_instance().config.base.handle_split:
-            self._handle_split(trading_date)
+        self._handle_split(trading_date)
 
     def _on_settlement(self, event):
         for position in list(self._positions.values()):
@@ -163,8 +166,17 @@ class StockAccount(BaseAccount):
         for order_book_id in to_be_removed:
             del self._dividend_receivable[order_book_id]
 
+    @staticmethod
+    def _int_to_date(d):
+        r, d = divmod(d, 100)
+        y, m = divmod(r, 100)
+        return datetime.date(year=y, month=m, day=d)
+
     def _handle_dividend_book_closure(self, trading_date):
         for order_book_id, position in six.iteritems(self._positions):
+            if position.quantity == 0:
+                continue
+
             dividend = Environment.get_instance().data_proxy.get_dividend_by_book_date(order_book_id, trading_date)
             if dividend is None:
                 continue
@@ -173,15 +185,15 @@ class StockAccount(BaseAccount):
             self._dividend_receivable[order_book_id] = {
                 'quantity': position.quantity,
                 'dividend_per_share': dividend_per_share,
-                'payable_date': dividend['payable_date'].date()
+                'payable_date': self._int_to_date(dividend['payable_date']),
             }
 
     def _handle_split(self, trading_date):
+        data_proxy = Environment.get_instance().data_proxy
         for order_book_id, position in six.iteritems(self._positions):
-            split = Environment.get_instance().data_proxy.get_split_by_ex_date(order_book_id, trading_date)
-            if split is None:
+            ratio = data_proxy.get_split_by_ex_date(order_book_id, trading_date)
+            if ratio is None:
                 continue
-            ratio = split['split_coefficient_to'] / split['split_coefficient_from']
             position.split_(ratio)
 
     @property

@@ -150,8 +150,6 @@ class Matcher(object):
             price = self._slippage_decider.get_trade_price(order.side, deal_price)
             trade = Trade.__from_create__(
                 order_id=order.order_id,
-                calendar_dt=self._calendar_dt,
-                trading_dt=self._trading_dt,
                 price=price,
                 amount=fill,
                 side=order.side,
@@ -165,7 +163,7 @@ class Matcher(object):
             order.fill(trade)
             self._turnover[order.order_book_id] += fill
 
-            self._env.event_bus.publish_event(Event(EVENT.TRADE, account=account, trade=trade))
+            self._env.event_bus.publish_event(Event(EVENT.TRADE, account=account, trade=trade, order=order))
 
             if order.type == ORDER_TYPE.MARKET and order.unfilled_quantity != 0:
                 reason = _(
